@@ -2,11 +2,15 @@
 
 An AirPlay mirroring and audio receiver library with a pure C API, built on top of [UxPlay](https://github.com/FDH2/UxPlay). Designed for embedding into desktop applications on Windows (MSYS2 / MinGW-w64), with first-class support for C# P/Invoke and WinUI 3 integration.
 
+The library wraps the full upstream UxPlay server logic (protocol handling, GStreamer pipelines, DNS-SD registration) behind a thin C facade. Configuration is done through a struct instead of command-line arguments, and the server runs on a background thread so your GUI stays responsive.
+
 ## Features
 
 - **Pure C API** -- 14 exported functions, opaque handle design, no C++ symbols leaked
-- **Non-blocking** -- `uxplay_start()` runs the server on a background thread; your GUI stays responsive
-- **Event-driven** -- a single callback delivers 11 event types (client connect/disconnect, mirroring state, audio metadata, errors, etc.)
+- **Non-blocking** -- `uxplay_start()` runs the server on a background thread
+- **Event-driven** -- a single callback delivers client connect/disconnect, mirroring state, audio metadata, video size changes, PIN display, and errors
+- **Log routing** -- all internal log output can be captured through a callback instead of going to stdout
+- **Restartable** -- global state is fully reset after `uxplay_stop()` returns; you can call `uxplay_start()` again without restarting the process
 - **Configurable** -- resolution, FPS cap, GStreamer pipeline elements, access control (open / PIN / password), volume range, and more
 - **DLL-ready** -- `__declspec(dllexport)` on Windows, `visibility("default")` on Linux/macOS
 - **C# bindings included** -- ready-to-use P/Invoke wrapper for .NET / WinUI 3 projects
@@ -74,21 +78,35 @@ The full lifecycle of a server takes six steps: **create -- configure -- set cal
 /* Event callback (called from a background thread) */
 static void on_event(void *ud, const uxplay_event_data_t *ev) {
     switch (ev->type) {
-    case UXPLAY_EVENT_STATE_CHANGED:
-        printf("State: %d\n", ev->state);
-        break;
     case UXPLAY_EVENT_CLIENT_CONNECTED:
-        printf("Client: %s\n", ev->client.device_name);
+        printf("Client: %s (%s)\n",
+               ev->client.device_name,
+               ev->client.device_model);
         break;
     case UXPLAY_EVENT_MIRROR_STARTED:
         printf("Screen mirroring started\n");
         break;
     case UXPLAY_EVENT_AUDIO_METADATA:
-        printf("Now playing: %s - %s\n", ev->audio_meta.artist, ev->audio_meta.title);
+        printf("Now playing: %s - %s\n",
+               ev->audio_meta.artist,
+               ev->audio_meta.title);
         break;
     default:
         break;
     }
+}
+
+/* Log callback (optional -- captures all internal log output) */
+static void on_log(void *ud, uxplay_log_level_t level, const char *msg) {
+    const char *tag;
+    switch (level) {
+    case UXPLAY_LOG_ERROR:   tag = "ERR"; break;
+    case UXPLAY_LOG_WARNING: tag = "WRN"; break;
+    case UXPLAY_LOG_INFO:    tag = "INF"; break;
+    case UXPLAY_LOG_DEBUG:   tag = "DBG"; break;
+    default:                 tag = "   "; break;
+    }
+    printf("[%s] %s\n", tag, msg);
 }
 
 int main(void) {
@@ -117,6 +135,7 @@ int main(void) {
 
     /* 3. Set callbacks */
     uxplay_set_event_callback(server, on_event, NULL);
+    uxplay_set_log_callback(server, on_log, NULL);
 
     /* 4. Start (non-blocking) */
     err = uxplay_start(server);
@@ -145,6 +164,8 @@ PATH="/path/to/build:$PATH" ./myserver
 
 Then open an iPhone or Mac on the same network, tap Screen Mirroring or AirPlay, and select "Living Room".
 
+The server can be stopped and restarted without recreating the instance. After `uxplay_stop()` returns, call `uxplay_start()` again to begin accepting connections with the same (or new) configuration.
+
 ## API Reference
 
 ### Lifecycle
@@ -154,9 +175,9 @@ Then open an iPhone or Mac on the same network, tap Screen Mirroring or AirPlay,
 | `uxplay_create(uxplay_t *out)` | Allocate a new server instance. |
 | `uxplay_configure(handle, &cfg)` | Apply a configuration struct. Call before `start`. String pointers are copied internally. |
 | `uxplay_set_event_callback(handle, cb, ud)` | Register an event callback (one per instance; pass `NULL` to remove). |
-| `uxplay_set_log_callback(handle, cb, ud)` | Register a log callback. |
+| `uxplay_set_log_callback(handle, cb, ud)` | Register a log callback. When set, all internal log output is routed through it instead of going to stdout. |
 | `uxplay_start(handle)` | Start the server on a background thread (non-blocking). |
-| `uxplay_stop(handle)` | Stop the server. Blocks until the background thread finishes. |
+| `uxplay_stop(handle)` | Stop the server. Blocks until the background thread finishes. The instance can be started again after this call returns. |
 | `uxplay_destroy(handle)` | Free all resources. Stops the server first if it is still running. |
 
 ### Runtime Control
@@ -164,7 +185,7 @@ Then open an iPhone or Mac on the same network, tap Screen Mirroring or AirPlay,
 | Function | Description |
 |----------|-------------|
 | `uxplay_get_state(handle)` | Returns the current `uxplay_state_t` (IDLE, STARTING, RUNNING, STOPPING, ERROR). |
-| `uxplay_set_volume(handle, dB)` | Set playback volume. `0.0` = maximum, negative values = quieter. |
+| `uxplay_set_volume(handle, dB)` | Reserved. AirPlay volume is controlled by the client device; the server receives volume changes through internal callbacks. |
 | `uxplay_get_connection_count(handle)` | Number of currently connected AirPlay clients. |
 | `uxplay_disconnect_clients(handle)` | Force-disconnect all clients. |
 
@@ -192,7 +213,7 @@ uxplay_config_t cfg = uxplay_default_config();
 |-------|------|---------|-------------|
 | `server_name` | `const char*` | `"UxPlay"` | Name shown on iOS/macOS AirPlay device list. |
 | `mac_address` | `const char*` | `NULL` (auto) | Fixed MAC address in `"AA:BB:CC:DD:EE:FF"` format. `NULL` auto-detects from the first network adapter. |
-| `append_hostname` | `bool` | `false` | Append `@hostname` to the server name. |
+| `append_hostname` | `bool` | `true` | Append `@hostname` to the server name. |
 
 ### Display
 
@@ -249,6 +270,7 @@ uxplay_config_t cfg = uxplay_default_config();
 |-------|------|---------|-------------|
 | `log_level` | `uxplay_log_level_t` | `INFO` | Minimum severity for log output. |
 | `nohold` | `bool` | `false` | Allow a new client to kick the existing one. |
+| `nofreeze` | `bool` | `false` | Do not freeze the last frame when the client disconnects. |
 | `coverart_display` | `bool` | `false` | Display cover art during audio-only playback. |
 
 ## Event Handling
@@ -257,17 +279,16 @@ Register a callback with `uxplay_set_event_callback()`. The callback is invoked 
 
 | Event Type | Payload | Description |
 |------------|---------|-------------|
-| `STATE_CHANGED` | `event->state` | Server state transition (IDLE, STARTING, RUNNING, ...). |
 | `CLIENT_CONNECTED` | `event->client` | A device connected. Fields: `device_id`, `device_model`, `device_name`. |
 | `CLIENT_DISCONNECTED` | (none) | The client disconnected. |
 | `DISPLAY_PIN` | `event->pin` | Show this PIN code to the user for pairing. |
 | `MIRROR_STARTED` | (none) | Screen mirroring has begun. |
 | `MIRROR_STOPPED` | (none) | Screen mirroring has ended. |
-| `AUDIO_STARTED` | (none) | Audio streaming has begun. |
-| `AUDIO_STOPPED` | (none) | Audio streaming has ended. |
 | `AUDIO_METADATA` | `event->audio_meta` | Now-playing info changed. Fields: `artist`, `title`, `album`. |
 | `VIDEO_SIZE_CHANGED` | `event->video_size` | Video resolution changed. Fields: `width`, `height`, `width_source`, `height_source`. |
 | `ERROR` | `event->error_msg` | An unrecoverable error occurred. |
+
+The following event types are defined in the header but not yet fired by the current implementation: `STATE_CHANGED`, `AUDIO_STARTED`, `AUDIO_STOPPED`. They are reserved for future use.
 
 Example:
 
@@ -296,7 +317,7 @@ static void on_event(void *user_data, const uxplay_event_data_t *event) {
 
 ## Log Callback
 
-Register with `uxplay_set_log_callback()` to capture internal log messages instead of printing to stderr:
+Register with `uxplay_set_log_callback()` to capture all internal log messages. When a log callback is set, the library routes every log line through it instead of printing to stdout. This is useful for integrating with your application's own logging framework.
 
 ```c
 static void on_log(void *ud, uxplay_log_level_t level, const char *msg) {
@@ -313,6 +334,8 @@ static void on_log(void *ud, uxplay_log_level_t level, const char *msg) {
 
 uxplay_set_log_callback(server, on_log, NULL);
 ```
+
+At startup the library logs the full argument list it passes to the internal server core as an `INFO`-level message prefixed with `[libuxplay] args:`. This is useful for diagnosing configuration issues.
 
 ## C# / WinUI 3 Integration
 
@@ -405,6 +428,10 @@ if (err != UXPLAY_OK) {
 **PIN code is never displayed**
 
 - Set `cfg.access_control = UXPLAY_ACCESS_PIN` and handle the `UXPLAY_EVENT_DISPLAY_PIN` event in your callback. The PIN string is in `event->pin`.
+
+**Closing the GStreamer video window**
+
+- In library mode, closing the GStreamer video window causes the server to shut down cleanly. The host application can restart the server by calling `uxplay_start()` again. The reconnect/relaunch behavior present in standalone UxPlay is intentionally disabled because GStreamer pipeline teardown on Windows is not safe in that code path.
 
 ## License
 
