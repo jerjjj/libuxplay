@@ -450,6 +450,13 @@ UXPLAY_API uxplay_error_t uxplay_start(uxplay_t handle) {
     /* Convert configuration to command-line arguments */
     auto args = config_to_args(&handle->cfg);
 
+    /* Diagnostic: log the generated argument list via log_cb */
+    if (handle->log_cb) {
+        std::string dbg = "[libuxplay] args:";
+        for (auto &s : args) { dbg += " "; dbg += s; }
+        handle->log_cb(handle->log_ud, UXPLAY_LOG_INFO, dbg.c_str());
+    }
+
     /* Install core callbacks BEFORE launching the thread */
     uxplay_core_set_callbacks(bridge_core_event, bridge_core_log, handle);
     g_active_inst = handle;

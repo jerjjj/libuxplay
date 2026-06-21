@@ -3320,6 +3320,10 @@ int start_uxplay (int argc, char *argv[]) {
     compression_type = 0;
     close_window = new_window_closing_behavior;
     main_loop();
+    /* Library mode: always shut down cleanly after main_loop exits.
+       The reconnect/relaunch path crashes on Windows (GStreamer teardown).
+       The C# layer manages restart via Stop+Start. */
+    do_shutdown = true;
         if (do_shutdown) {
         LOGI("Stopping RAOP Server...");
         stop_raop_server();
@@ -3369,8 +3373,9 @@ int start_uxplay (int argc, char *argv[]) {
 void stop_uxplay() {
     do_shutdown = true;
     reset_loop = true;
-    stop_raop_server();
-    stop_dnssd();
+    /* Do NOT call stop_raop_server() / stop_dnssd() here.
+       They will be called by the server thread after the main loop exits.
+       Calling them from this thread causes a double-free crash. */
     if (g_loop && g_main_loop_is_running(g_loop)) {
         g_main_loop_quit(g_loop);
     }
