@@ -1,0 +1,40 @@
+# Build
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+
+# Reasonix / session data
+.reasonix/
+*.json.bak
+cmake_install.cmake
+Makefile
+*.ninja
+.ninja_*
+
+# Compiled objects
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.dll.a
+*.so
+*.dylib
+*.exe
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.sln
+*.vcxproj*
+out/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+uxplay-windows*

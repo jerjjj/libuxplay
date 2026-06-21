@@ -1,0 +1,111 @@
+include_directories( playfair llhttp )
+
+# Compiler flags
+if ( WIN32 )
+  set( CMAKE_C_FLAGS "-O2 -DSTANDALONE -D__STDC_CONSTANT_MACROS -D__STDC_LIMIT_MACROS \
+-DTARGET_POSIX -D_WIN32 -fPIC -DPIC -D_REENTRANT -D_LARGEFILE64_SOURCE \
+-D_FILE_OFFSET_BITS=64 -Wall ${CMAKE_C_FLAGS}" )
+elseif( UNIX AND NOT APPLE )
+  set( CMAKE_C_FLAGS "-O2 -DSTANDALONE -D__STDC_CONSTANT_MACROS -D__STDC_LIMIT_MACROS \
+-DTARGET_POSIX -D_LINUX -fPIC -DPIC -D_REENTRANT -D_LARGEFILE64_SOURCE \
+-D_FILE_OFFSET_BITS=64 -Wall ${CMAKE_C_FLAGS}" )
+endif()
+
+# Suppress Avahi nag on Linux
+if ( UNIX AND NOT APPLE )
+  add_definitions( -DSUPPRESS_AVAHI_COMPAT_WARNING -DFULL_RANGE_RGB_FIX )
+endif()
+
+# Check endianness header
+include( CheckIncludeFiles )
+if ( WIN32 )
+  CHECK_INCLUDE_FILES( "winsock2.h" WINSOCK2 )
+else()
+  CHECK_INCLUDE_FILES( "sys/endian.h" BSD )
+  if ( BSD )
+    add_definitions( -DSYS_ENDIAN_H )
+  endif()
+endif()
+
+add_subdirectory( llhttp )
+add_subdirectory( playfair )
+
+# Collect all .c sources in this directory
+aux_source_directory( . play_src )
+add_library( airplay STATIC ${play_src} )
+
+# Link dependencies
+if ( WIN32 )
+  target_link_libraries( airplay pthread playfair llhttp wsock32 iphlpapi ws2_32 )
+elseif( APPLE )
+  target_link_libraries( airplay pthread playfair llhttp )
+else()
+  target_link_libraries( airplay PUBLIC pthread playfair llhttp )
+endif()
+
+# --- libplist ---
+find_package( PkgConfig REQUIRED )
+pkg_search_module( PLIST REQUIRED libplist-2.0 )
+if ( WIN32 )
+  find_library( LIBPLIST ${PLIST_LIBRARIES} PATH ${PLIST_LIBDIR} )
+  target_link_libraries( airplay ${LIBPLIST} )
+else()
+  find_library( LIBPLIST ${PLIST_LIBRARIES} PATH ${PLIST_LIBDIR} )
+  target_link_libraries( airplay PUBLIC ${LIBPLIST} )
+endif()
+if ( PLIST_FOUND )
+  message( STATUS "found libplist-${PLIST_VERSION}" )
+  pkg_check_modules( PLIST_21 libplist-2.0>=2.1.0 )
+  if ( PLIST_21_FOUND )
+    add_definitions( -DPLIST_210 )
+  endif()
+  pkg_check_modules( PLIST_23 libplist-2.0>=2.3.0 )
+  if ( PLIST_23_FOUND )
+    add_definitions( -DPLIST_230 )
+  endif()
+endif()
+target_include_directories( airplay PRIVATE ${PLIST_INCLUDE_DIRS} )
+
+# --- OpenSSL (libcrypto) ---
+find_package( OpenSSL 1.1.1 REQUIRED )
+target_compile_definitions( airplay PUBLIC OPENSSL_API_COMPAT=0x10101000L )
+if ( WIN32 )
+  target_link_libraries( airplay OpenSSL::Crypto )
+else()
+  target_link_libraries( airplay PUBLIC OpenSSL::Crypto )
+endif()
+
+# --- DNS-SD ---
+if ( NOT APPLE )
+  pkg_search_module( AVAHI_DNSSD avahi-compat-libdns_sd )
+  if ( AVAHI_DNSSD_FOUND )
+    target_include_directories( airplay PRIVATE ${AVAHI_DNSSD_INCLUDE_DIRS} )
+    find_library( DNSSD ${AVAHI_DNSSD_LIBRARIES} PATH ${AVAHI_DNSSD_LIBDIR} )
+    target_link_libraries( airplay PUBLIC ${DNSSD} )
+  else()
+    if ( WIN32 )
+      if ( DEFINED ENV{BONJOUR_SDK_HOME} )
+        set( BONJOUR_SDK "$ENV{BONJOUR_SDK_HOME}" )
+      else()
+        set( BONJOUR_SDK "C:\Program Files\Bonjour SDK" )
+      endif()
+      message( STATUS "BONJOUR_SDK_HOME: ${BONJOUR_SDK}" )
+      set( DNSSD "${BONJOUR_SDK}/Lib/x64/dnssd.lib" )
+      target_link_libraries( airplay ${DNSSD} )
+      find_path( DNSSD_INCLUDE_DIR dns_sd.h HINTS ${BONJOUR_SDK}/Include )
+    else()
+      find_library( DNSSD dns_sd )
+      if ( NOT DNSSD )
+        message( FATAL_ERROR "libdns_sd missing" )
+      endif()
+      target_link_libraries( airplay PUBLIC ${DNSSD} )
+      find_path( DNSSD_INCLUDE_DIR dns_sd.h HINTS ${CMAKE_INSTALL_INCLUDEDIR} )
+    endif()
+    if ( NOT DNSSD_INCLUDE_DIR )
+      message( FATAL_ERROR "dns_sd.h not found" )
+    else()
+      message( STATUS "found dns_sd.h in ${DNSSD_INCLUDE_DIR}" )
+    endif()
+    target_include_directories( airplay PRIVATE ${DNSSD_INCLUDE_DIR} )
+  endif()
+endif()
