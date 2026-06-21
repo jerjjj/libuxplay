@@ -28,6 +28,15 @@
 #include "../include/uxplaylib.h"
 #include "uxplay_api.h"
 
+/* We also need raop.h for runtime controls (volume, disconnect) */
+#include "../lib/raop.h"
+
+/* ========================================================================
+ * Active instance pointer (single-instance; for bridge callbacks)
+ * ======================================================================== */
+
+static uxplay_instance_s *g_active_inst = nullptr;
+
 /* ========================================================================
  * Internal instance structure
  * ======================================================================== */
@@ -59,6 +68,74 @@ struct uxplay_instance_s {
     /* Background thread */
     std::thread server_thread;
 };
+
+/* ========================================================================
+ * Bridge: forward core events to user's event callback
+ * ======================================================================== */
+
+static void bridge_core_event(const uxplay_core_event_t *evt, void *ud) {
+    auto *inst = static_cast<uxplay_instance_s *>(ud);
+    if (!inst || !inst->event_cb) return;
+
+    uxplay_event_data_t out{};
+    switch (evt->type) {
+    case UXPLAY_CORE_EVT_CLIENT_CONNECTED:
+        out.type = UXPLAY_EVENT_CLIENT_CONNECTED;
+        out.client.device_id    = evt->client.device_id;
+        out.client.device_model = evt->client.model;
+        out.client.device_name  = evt->client.name;
+        break;
+    case UXPLAY_CORE_EVT_CLIENT_DISCONNECTED:
+        out.type = UXPLAY_EVENT_CLIENT_DISCONNECTED;
+        break;
+    case UXPLAY_CORE_EVT_DISPLAY_PIN:
+        out.type = UXPLAY_EVENT_DISPLAY_PIN;
+        out.pin  = evt->pin;
+        break;
+    case UXPLAY_CORE_EVT_MIRROR_STARTED:
+        out.type = UXPLAY_EVENT_MIRROR_STARTED;
+        break;
+    case UXPLAY_CORE_EVT_MIRROR_STOPPED:
+        out.type = UXPLAY_EVENT_MIRROR_STOPPED;
+        break;
+    case UXPLAY_CORE_EVT_AUDIO_STARTED:
+        out.type = UXPLAY_EVENT_AUDIO_STARTED;
+        break;
+    case UXPLAY_CORE_EVT_VIDEO_SIZE:
+        out.type = UXPLAY_EVENT_VIDEO_SIZE_CHANGED;
+        out.video_size.width_source  = evt->video_size.ws;
+        out.video_size.height_source = evt->video_size.hs;
+        out.video_size.width         = evt->video_size.w;
+        out.video_size.height        = evt->video_size.h;
+        break;
+    case UXPLAY_CORE_EVT_AUDIO_META:
+        out.type = UXPLAY_EVENT_AUDIO_METADATA;
+        out.audio_meta.artist = evt->meta.artist;
+        out.audio_meta.title  = evt->meta.title;
+        out.audio_meta.album  = evt->meta.album;
+        break;
+    case UXPLAY_CORE_EVT_ERROR:
+        out.type = UXPLAY_EVENT_ERROR;
+        out.error_msg = evt->error_msg;
+        break;
+    default:
+        return;  /* unknown event, don't forward */
+    }
+    inst->event_cb(inst->event_ud, &out);
+}
+
+static void bridge_core_log(int level, const char *msg, void *ud) {
+    auto *inst = static_cast<uxplay_instance_s *>(ud);
+    if (!inst || !inst->log_cb) return;
+
+    uxplay_log_level_t lv;
+    if      (level <= 3) lv = UXPLAY_LOG_ERROR;
+    else if (level == 4) lv = UXPLAY_LOG_WARNING;
+    else if (level == 5) lv = UXPLAY_LOG_INFO;
+    else if (level == 6) lv = UXPLAY_LOG_DEBUG;
+    else                 lv = UXPLAY_LOG_VERBOSE;
+    inst->log_cb(inst->log_ud, lv, msg);
+}
 
 /* ========================================================================
  * Config → argv conversion
@@ -373,6 +450,10 @@ UXPLAY_API uxplay_error_t uxplay_start(uxplay_t handle) {
     /* Convert configuration to command-line arguments */
     auto args = config_to_args(&handle->cfg);
 
+    /* Install core callbacks BEFORE launching the thread */
+    uxplay_core_set_callbacks(bridge_core_event, bridge_core_log, handle);
+    g_active_inst = handle;
+
     /* Launch the core in a background thread */
     handle->server_thread = std::thread([handle, args = std::move(args)]() {
         /* Build argv (pointers into the captured strings) */
@@ -386,6 +467,9 @@ UXPLAY_API uxplay_error_t uxplay_start(uxplay_t handle) {
         /* This blocks until the server shuts down */
         start_uxplay(static_cast<int>(argv.size()), argv.data());
 
+        /* Reset core globals so server can be restarted */
+        uxplay_core_reset_state();
+        g_active_inst = nullptr;
         handle->state.store(UXPLAY_STATE_IDLE);
     });
 
@@ -437,24 +521,23 @@ UXPLAY_API uxplay_state_t uxplay_get_state(uxplay_t handle) {
 
 UXPLAY_API uxplay_error_t uxplay_set_volume(uxplay_t handle, double volume) {
     if (!handle) return UXPLAY_ERR_INVALID_ARGUMENT;
-    /* Volume control requires access to the raop instance inside
-       uxplay_core.cpp.  This is a limitation of the current wrapper
-       approach; a future version could expose raop_set_volume(). */
+    /* AirPlay volume is controlled by the client device.
+       The server receives volume changes through callbacks.
+       Server-initiated volume control is not part of the protocol. */
     (void)volume;
     return UXPLAY_OK;
 }
 
 UXPLAY_API int uxplay_get_connection_count(uxplay_t handle) {
     if (!handle) return 0;
-    /* Connection count is tracked inside uxplay_core.cpp globals.
-       Not exposed yet; returns 0 as a safe default. */
-    return 0;
+    return (int)uxplay_core_get_connections();
 }
 
 UXPLAY_API uxplay_error_t uxplay_disconnect_clients(uxplay_t handle) {
     if (!handle) return UXPLAY_ERR_INVALID_ARGUMENT;
     if (handle->state.load() != UXPLAY_STATE_RUNNING)
         return UXPLAY_ERR_NOT_RUNNING;
-    /* Not yet implemented — would require access to raop_t. */
+    raop_t *r = (raop_t *)uxplay_core_get_raop();
+    if (r) raop_remove_known_connections(r);
     return UXPLAY_OK;
 }

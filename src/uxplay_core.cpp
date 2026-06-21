@@ -228,16 +228,55 @@ static const char *reason_active = "actively receiving video";
 static float previous_hls_position = 0.0f;
 #endif
 
+/* ======================================================================
+ * External callback hooks (libuxplay extensions, not in upstream UxPlay)
+ * ====================================================================== */
+
+static uxplay_core_event_fn  g_ext_event_cb  = nullptr;
+static uxplay_core_log_fn    g_ext_log_cb    = nullptr;
+static void                 *g_ext_user_data = nullptr;
+
+static void fire_core_event(const uxplay_core_event_t *evt) {
+    if (g_ext_event_cb) g_ext_event_cb(evt, g_ext_user_data);
+}
+
+void uxplay_core_set_callbacks(uxplay_core_event_fn event_cb,
+                               uxplay_core_log_fn   log_cb,
+                               void                *user_data) {
+    g_ext_event_cb  = event_cb;
+    g_ext_log_cb    = log_cb;
+    g_ext_user_data = user_data;
+}
+
+unsigned int uxplay_core_get_connections(void) {
+    return open_connections;
+}
+
+void *uxplay_core_get_raop(void) {
+    return (void *) raop;
+}
+
 /* logging */
 
 static void log(int level, const char* format, ...) {
     va_list vargs;
     if (level > log_level) return;
+
+    /* Format the message into a buffer */
+    char buf[2048];
+    va_start(vargs, format);
+    vsnprintf(buf, sizeof(buf), format, vargs);
+    va_end(vargs);
+
+    /* Route to external callback if set */
+    if (g_ext_log_cb) {
+        g_ext_log_cb(level, buf, g_ext_user_data);
+        return;   /* external callback owns all output */
+    }
+
+    /* Fallback: print to stdout */
     switch (level) {
-    case 0:
-    case 1:
-    case 2:
-    case 3:
+    case 0: case 1: case 2: case 3:
         printf("*** ERROR: ");
         break;
     case 4:
@@ -246,10 +285,7 @@ static void log(int level, const char* format, ...) {
     default:
         break;
     }
-    va_start(vargs, format);
-    vprintf(format, vargs);
-    printf("\n");
-    va_end(vargs);
+    printf("%s\n", buf);
 }
 
 #define LOGD(...) log(LOGGER_DEBUG, __VA_ARGS__)
@@ -1774,14 +1810,14 @@ static void process_metadata(int count, const char *dmap_tag, const unsigned cha
                 break;
             case 'l':
                 metadata_text->append("Album: ");  /*asal*/
-                if (render_coverart) {
+                {
                     track_album.erase();
                     track_album.append(metadata, metadata + datalen);
                 }
                 break;
             case 'r':
                 metadata_text->append("Artist: ");  /*asar*/
-                if (render_coverart) {
+                {
                     artist.erase();
                     artist.append(metadata, metadata + datalen);
                     if (coverart_artist == "_pending_") { 
@@ -1861,7 +1897,7 @@ static void process_metadata(int count, const char *dmap_tag, const unsigned cha
     } else if (strcmp (dmap_tag, "minm") == 0) {
         dmap_type = 9;
         metadata_text->append("Title: ");
-        if (render_coverart) {
+        {
             track_title.erase();
             track_title.append(metadata, metadata + datalen);
         }
@@ -2201,6 +2237,11 @@ extern "C" void display_pin(void *cls, char *pin) {
         LOGI("%s\n",image);     
         free (image);
     }
+    /* libuxplay: fire pin event */
+    uxplay_core_event_t evt{};
+    evt.type = UXPLAY_CORE_EVT_DISPLAY_PIN;
+    evt.pin = pin;
+    fire_core_event(&evt);
 }
 
 extern "C" const char *passwd(void *cls, int *len){
@@ -2249,6 +2290,12 @@ extern "C" void conn_destroy (void *cls) {
             mux_renderer_stop();
         }
     }
+    /* libuxplay: fire disconnected event */
+    {
+        uxplay_core_event_t evt{};
+        evt.type = UXPLAY_CORE_EVT_CLIENT_DISCONNECTED;
+        fire_core_event(&evt);
+    }
 }
 
 extern "C" void conn_feedback (void *cls) {
@@ -2294,6 +2341,15 @@ extern "C" void report_client_request(void *cls, char *deviceid, char * model, c
     // Pass device model to renderer for device frame display
     if (*admit && use_video) {
         video_renderer_set_device_model(model, name);
+    }
+    /* libuxplay: fire connected event */
+    if (*admit) {
+        uxplay_core_event_t evt{};
+        evt.type = UXPLAY_CORE_EVT_CLIENT_CONNECTED;
+        evt.client.device_id = deviceid;
+        evt.client.model = model;
+        evt.client.name = name;
+        fire_core_event(&evt);
     }
 }
 
@@ -2360,10 +2416,20 @@ extern "C" void video_process (void *cls, raop_ntp_t *ntp, video_decode_struct *
 
 #ifdef DBUS
 extern "C" void mirror_video_running  (void *cls, bool is_running) {
-    if (scrsv != 1) {
-        return;
+    if (scrsv == 1) {
+        dbus_screensaver_inhibiter(is_running);
     }
-    dbus_screensaver_inhibiter(is_running);
+    /* libuxplay: fire mirror event */
+    uxplay_core_event_t evt{};
+    evt.type = is_running ? UXPLAY_CORE_EVT_MIRROR_STARTED : UXPLAY_CORE_EVT_MIRROR_STOPPED;
+    fire_core_event(&evt);
+}
+#else
+extern "C" void mirror_video_running  (void *cls, bool is_running) {
+    /* libuxplay: fire mirror event (non-DBUS build) */
+    uxplay_core_event_t evt{};
+    evt.type = is_running ? UXPLAY_CORE_EVT_MIRROR_STARTED : UXPLAY_CORE_EVT_MIRROR_STOPPED;
+    fire_core_event(&evt);
 }
 #endif
 
@@ -2481,6 +2547,14 @@ extern "C" void video_report_size(void *cls, float *width_source, float *height_
     if (use_video) {
         video_renderer_size(width_source, height_source, width, height);
     }
+    /* libuxplay: fire video size event */
+    uxplay_core_event_t evt{};
+    evt.type = UXPLAY_CORE_EVT_VIDEO_SIZE;
+    evt.video_size.ws = *width_source;
+    evt.video_size.hs = *height_source;
+    evt.video_size.w  = *width;
+    evt.video_size.h  = *height;
+    fire_core_event(&evt);
 }
 
 extern "C" void audio_set_coverart(void *cls, const void *buffer, int buflen) {
@@ -2556,6 +2630,15 @@ extern "C" void audio_set_metadata(void *cls, const void *buffer, int buflen) {
             track_title.length() ? track_title.c_str() : NULL,
             artist.length() ? artist.c_str() : NULL,
             track_album.length() ? track_album.c_str() : NULL);
+    }
+    /* libuxplay: fire audio metadata event */
+    if (artist.length() || track_title.length() || track_album.length()) {
+        uxplay_core_event_t evt{};
+        evt.type = UXPLAY_CORE_EVT_AUDIO_META;
+        evt.meta.artist = artist.empty() ? nullptr : artist.c_str();
+        evt.meta.title  = track_title.empty() ? nullptr : track_title.c_str();
+        evt.meta.album  = track_album.empty() ? nullptr : track_album.c_str();
+        fire_core_event(&evt);
     }
 }
 
@@ -2715,9 +2798,7 @@ static int start_raop_server (unsigned short display[5], unsigned short tcp[3], 
     raop_cbs.export_dacp = export_dacp;
     raop_cbs.video_reset = video_reset;
     raop_cbs.video_set_codec = video_set_codec;
-#ifdef DBUS
     raop_cbs.mirror_video_running = mirror_video_running;
-#endif
     raop_cbs.on_video_play = on_video_play;
     raop_cbs.on_video_scrub = on_video_scrub;
     raop_cbs.on_video_rate = on_video_rate;
@@ -3293,6 +3374,94 @@ void stop_uxplay() {
     if (g_loop && g_main_loop_is_running(g_loop)) {
         g_main_loop_quit(g_loop);
     }
+}
+
+/* libuxplay: reset all mutable global state so the server can be restarted */
+void uxplay_core_reset_state(void) {
+    server_name    = DEFAULT_NAME;
+    dnssd          = NULL;
+    raop           = NULL;
+    render_logger  = NULL;
+    audio_sync     = false;
+    video_sync     = true;
+    audio_delay_alac = 0;
+    audio_delay_aac  = 0;
+    relaunch_video = false;
+    reset_loop     = false;
+    open_connections = 0;
+    videosink      = "autovideosink";
+    videosink_options = "";
+    videoflip[0]   = NONE;
+    videoflip[1]   = NONE;
+    use_video      = true;
+    compression_type = 0;
+    audiosink      = "autoaudiosink";
+    audiodelay     = -1;
+    use_audio      = true;
+    close_window   = true;
+    full_video_reset = true;
+    video_parser   = "h264parse";
+    video_decoder  = "decodebin";
+    video_converter = "videoconvert";
+    show_client_FPS_data = false;
+    video_dumpfile = NULL;
+    dump_video     = false;
+    audio_dumpfile = NULL;
+    dump_audio     = false;
+    audio_type     = 0x00;
+    previous_audio_type = 0x00;
+    fullscreen     = false;
+    render_coverart = false;
+    coverart_filename = "";
+    metadata_filename = "";
+    do_append_hostname = true;
+    use_random_hw_addr = false;
+    memset(display, 0, sizeof(display));
+    memset(tcp, 0, sizeof(tcp));
+    memset(udp, 0, sizeof(udp));
+    g_loop         = NULL;
+    gmainloop      = NULL;
+    do_shutdown    = false;
+    debug_log      = DEFAULT_DEBUG_LOG;
+    log_level      = LOGGER_INFO;
+    bt709_fix      = false;
+    srgb_fix       = DEFAULT_SRGB_FIX;
+    nohold         = 0;
+    nofreeze       = false;
+    remote_clock_offset = 0;
+    allowed_clients.clear();
+    blocked_clients.clear();
+    restrict_clients = false;
+    setup_legacy_pairing = false;
+    pin_pw         = 0;
+    password       = "";
+    pin            = 0;
+    keyfile        = "";
+    mac_address    = "";
+    dacpfile       = "";
+    registration_list = false;
+    pairing_register  = "";
+    registered_keys.clear();
+    db_low         = -30.0;
+    db_high        = 0.0;
+    taper_volume   = false;
+    initial_volume = 0.0;
+    h265_support   = false;
+    n_video_renderers = 0;
+    n_audio_renderers = 0;
+    hls_support    = false;
+    lang           = "";
+    url            = "";
+    preserve_connections = false;
+    missed_feedback = 0;
+    reset_httpd    = false;
+    artist.clear();
+    track_title.clear();
+    track_album.clear();
+    coverart_artist = "";
+    rtp_pipeline   = "";
+    audio_rtp_pipeline = "";
+    mux_to_file    = false;
 }
 
 static void cleanup() {
