@@ -27,15 +27,23 @@ elseif( UNIX AND NOT APPLE )
   add_definitions( -DSUPPRESS_AVAHI_COMPAT_WARNING -DFULL_RANGE_RGB_FIX )
 endif()
 
-# ---- Build sub-libraries ----
+# ---- Build sub-libraries (order matters: dns_sd before lib) ----
+add_subdirectory( lib/dns_sd )
+add_subdirectory( lib/llhttp )
+add_subdirectory( lib/playfair )
 add_subdirectory( lib )
 add_subdirectory( renderers )
 
 # ---- uxplaylib (shared / static) ----
+set( UXPLAYLIB_SOURCES
+  src/uxplay_core.cpp
+  src/uxplaylib.cpp
+)
+
 if( BUILD_SHARED_LIBS )
-  add_library( uxplaylib SHARED src/uxplaylib.cpp )
+  add_library( uxplaylib SHARED ${UXPLAYLIB_SOURCES} )
 else()
-  add_library( uxplaylib STATIC src/uxplaylib.cpp )
+  add_library( uxplaylib STATIC ${UXPLAYLIB_SOURCES} )
 endif()
 
 target_compile_definitions( uxplaylib PRIVATE UXPLAY_BUILDING_DLL )
@@ -45,7 +53,8 @@ target_include_directories( uxplaylib
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}        # so uxplay_core.cpp can find "lib/raop.h"
+    ${CMAKE_CURRENT_SOURCE_DIR}/src    # for "uxplay_api.h"
 )
 
 target_link_libraries( uxplaylib PRIVATE renderers airplay )

@@ -1,2 +1,6 @@
-add_library( llhttp STATIC api.c http.c llhttp.c )
-target_include_directories( llhttp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} )
+aux_source_directory(. llhttp_src)
+set(DIR_SRCS ${llhttp_src})
+include_directories(.)
+add_library( llhttp
+        STATIC
+        ${DIR_SRCS})
