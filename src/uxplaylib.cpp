@@ -248,6 +248,7 @@ static std::vector<std::string> config_to_args(const uxplay_config_t *c) {
     /* ---- Network ---- */
     if (c->tcp_ports[0]) {
         a.push_back("-p");
+        a.push_back("tcp");
         std::string ports = std::to_string(c->tcp_ports[0]);
         if (c->tcp_ports[1]) ports += "," + std::to_string(c->tcp_ports[1]);
         if (c->tcp_ports[2]) ports += "," + std::to_string(c->tcp_ports[2]);
@@ -255,6 +256,7 @@ static std::vector<std::string> config_to_args(const uxplay_config_t *c) {
     }
     if (c->udp_ports[0]) {
         a.push_back("-p");
+        a.push_back("udp");
         std::string ports = std::to_string(c->udp_ports[0]);
         if (c->udp_ports[1]) ports += "," + std::to_string(c->udp_ports[1]);
         if (c->udp_ports[2]) ports += "," + std::to_string(c->udp_ports[2]);
