@@ -298,7 +298,7 @@ static std::vector<std::string> config_to_args(const uxplay_config_t *c) {
         a.push_back("-nohold");
     }
     if (c->nofreeze) {
-        a.push_back("-nc");
+        a.push_back("-nofreeze");
     }
     if (c->keep_window) {
         a.push_back("-nc");
@@ -330,6 +330,13 @@ static std::vector<std::string> config_to_args(const uxplay_config_t *c) {
     if (c->record_filename && c->record_filename[0]) {
         a.push_back("-mp4");
         a.push_back(c->record_filename);
+    }
+    if (c->hls_support) {
+        a.push_back("-hls");
+    }
+    if (c->lang && c->lang[0]) {
+        a.push_back("-lang");
+        a.push_back(c->lang);
     }
     if (c->coverart_display) {
         if (c->coverart_filename && c->coverart_filename[0]) {
