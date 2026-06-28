@@ -181,7 +181,6 @@ namespace UxPlay.Interop
 
         // Video
         public IntPtr VideosinkPtr;
-        public IntPtr VideosinkOptionsPtr;
         public IntPtr VideoDecoderPtr;
         public IntPtr VideoConverterPtr;
         public IntPtr VideoParserPtr;

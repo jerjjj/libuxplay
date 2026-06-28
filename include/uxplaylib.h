@@ -157,7 +157,6 @@ typedef struct uxplay_config_s {
 
     /* ---- Video rendering ---- */
     const char *videosink;       /**< GStreamer sink  (NULL = platform default).    */
-    const char *videosink_options;
     const char *video_decoder;   /**< GStreamer decoder  (NULL = "decodebin").      */
     const char *video_converter; /**< GStreamer converter(NULL = "videoconvert").   */
     const char *video_parser;    /**< GStreamer parser   (NULL = "h264parse").      */
@@ -194,6 +193,14 @@ typedef struct uxplay_config_s {
     bool  hls_support;
     const char *lang;            /**< HLS language prefs, e.g. "en:fr:es".         */
     bool  nohold;                /**< Let new client kick existing one.             */
+    bool  taper_volume;          /**< Use tapered volume curve (default false).     */
+    bool  srgb_fix;              /**< Full-range [0-255] color (default true).      */
+    double audio_latency;        /**< Audio latency in sec (0 = auto 0.25).         */
+    int   reset_timeout;         /**< Silent reset after N sec (0 = never).         */
+    bool  keep_window;           /**< Keep video window on disconnect.              */
+    bool  force_software_decoder;/**< Force software h264 decoding.                 */
+    const char *metadata_filename; /**< Write metadata text to this file.           */
+    const char *record_filename; /**< Record media to MP4 file (NULL = no).        */
 } uxplay_config_t;
 
 /* ===================================================================

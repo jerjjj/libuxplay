@@ -49,7 +49,6 @@ struct uxplay_instance_s {
     std::string str_server_name;
     std::string str_mac_address;
     std::string str_videosink;
-    std::string str_videosink_options;
     std::string str_video_decoder;
     std::string str_video_converter;
     std::string str_video_parser;
@@ -58,6 +57,8 @@ struct uxplay_instance_s {
     std::string str_keyfile;
     std::string str_coverart_filename;
     std::string str_lang;
+    std::string str_metadata_filename;
+    std::string str_record_filename;
 
     /* Callbacks (currently informational — not wired into core) */
     uxplay_event_callback_t event_cb  = nullptr;
@@ -183,10 +184,6 @@ static std::vector<std::string> config_to_args(const uxplay_config_t *c) {
             a.push_back("-vs");
             a.push_back(c->videosink);
         }
-        if (c->videosink_options && c->videosink_options[0]) {
-            a.push_back("-vso");
-            a.push_back(c->videosink_options);
-        }
         if (c->video_decoder && c->video_decoder[0]) {
             a.push_back("-vd");
             a.push_back(c->video_decoder);
@@ -200,9 +197,15 @@ static std::vector<std::string> config_to_args(const uxplay_config_t *c) {
             a.push_back(c->video_parser);
         }
         if (c->videoflip != UXPLAY_FLIP_NONE) {
-            a.push_back("-vf");
-            const char *flips[] = {"no","left","right","invert","vflip","hflip"};
-            a.push_back(flips[c->videoflip]);
+            /* Map to upstream -f (flip) / -r (rotate) */
+            switch (c->videoflip) {
+            case UXPLAY_FLIP_HFLIP:  a.push_back("-f"); a.push_back("H"); break;
+            case UXPLAY_FLIP_VFLIP:  a.push_back("-f"); a.push_back("V"); break;
+            case UXPLAY_FLIP_INVERT: a.push_back("-f"); a.push_back("I"); break;
+            case UXPLAY_FLIP_RIGHT:  a.push_back("-r"); a.push_back("R"); break;
+            case UXPLAY_FLIP_LEFT:   a.push_back("-r"); a.push_back("L"); break;
+            default: break;
+            }
         }
         if (c->fullscreen) {
             a.push_back("-fs");
@@ -239,9 +242,16 @@ static std::vector<std::string> config_to_args(const uxplay_config_t *c) {
         a.push_back(buf);
     }
     if (c->initial_volume != 0.0) {
-        a.push_back("-iv");
+        a.push_back("-vol");
+        /* Convert dB to 0.0-1.0 fraction matching upstream formula */
+        double frac;
+        if (c->initial_volume <= -144.0)      frac = 0.0;
+        else if (c->initial_volume >= 0.0)    frac = 1.0;
+        else                                  frac = (c->initial_volume + 144.0) / 144.0;
+        if (frac < 0.0) frac = 0.0;
+        if (frac > 1.0) frac = 1.0;
         char buf[32];
-        snprintf(buf, sizeof(buf), "%.1f", c->initial_volume);
+        snprintf(buf, sizeof(buf), "%.3f", frac);
         a.push_back(buf);
     }
 
@@ -289,6 +299,37 @@ static std::vector<std::string> config_to_args(const uxplay_config_t *c) {
     }
     if (c->nofreeze) {
         a.push_back("-nc");
+    }
+    if (c->keep_window) {
+        a.push_back("-nc");
+    }
+    if (c->force_software_decoder) {
+        a.push_back("-avdec");
+    }
+    if (c->taper_volume) {
+        a.push_back("-taper");
+    }
+    if (!c->srgb_fix) {
+        a.push_back("-srgb");
+        a.push_back("no");
+    }
+    if (c->audio_latency > 0.0) {
+        a.push_back("-al");
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%.2f", c->audio_latency);
+        a.push_back(buf);
+    }
+    if (c->reset_timeout > 0) {
+        a.push_back("-reset");
+        a.push_back(std::to_string(c->reset_timeout));
+    }
+    if (c->metadata_filename && c->metadata_filename[0]) {
+        a.push_back("-md");
+        a.push_back(c->metadata_filename);
+    }
+    if (c->record_filename && c->record_filename[0]) {
+        a.push_back("-mp4");
+        a.push_back(c->record_filename);
     }
     if (c->coverart_display) {
         if (c->coverart_filename && c->coverart_filename[0]) {
@@ -350,6 +391,12 @@ UXPLAY_API uxplay_config_t uxplay_default_config(void) {
     c.nohold           = false;
     c.coverart_display = false;
     c.hls_support      = false;
+    c.taper_volume          = false;
+    c.srgb_fix              = true;
+    c.audio_latency         = 0.0;
+    c.reset_timeout         = 0;
+    c.keep_window           = false;
+    c.force_software_decoder = false;
     return c;
 }
 
@@ -396,7 +443,6 @@ UXPLAY_API uxplay_error_t uxplay_configure(uxplay_t handle,
     copy_string(handle->str_server_name,      config->server_name);
     copy_string(handle->str_mac_address,       config->mac_address);
     copy_string(handle->str_videosink,         config->videosink);
-    copy_string(handle->str_videosink_options, config->videosink_options);
     copy_string(handle->str_video_decoder,     config->video_decoder);
     copy_string(handle->str_video_converter,   config->video_converter);
     copy_string(handle->str_video_parser,      config->video_parser);
@@ -405,13 +451,14 @@ UXPLAY_API uxplay_error_t uxplay_configure(uxplay_t handle,
     copy_string(handle->str_keyfile,           config->keyfile);
     copy_string(handle->str_coverart_filename, config->coverart_filename);
     copy_string(handle->str_lang,              config->lang);
+    copy_string(handle->str_metadata_filename, config->metadata_filename);
+    copy_string(handle->str_record_filename,   config->record_filename);
 
     /* Copy the whole struct, then fix the string pointers */
     handle->cfg = *config;
     handle->cfg.server_name      = handle->str_server_name.c_str();
     handle->cfg.mac_address      = handle->str_mac_address.empty() ? nullptr : handle->str_mac_address.c_str();
     handle->cfg.videosink        = handle->str_videosink.empty() ? nullptr : handle->str_videosink.c_str();
-    handle->cfg.videosink_options= handle->str_videosink_options.empty() ? nullptr : handle->str_videosink_options.c_str();
     handle->cfg.video_decoder    = handle->str_video_decoder.empty() ? nullptr : handle->str_video_decoder.c_str();
     handle->cfg.video_converter  = handle->str_video_converter.empty() ? nullptr : handle->str_video_converter.c_str();
     handle->cfg.video_parser     = handle->str_video_parser.empty() ? nullptr : handle->str_video_parser.c_str();
@@ -420,6 +467,8 @@ UXPLAY_API uxplay_error_t uxplay_configure(uxplay_t handle,
     handle->cfg.keyfile          = handle->str_keyfile.empty() ? nullptr : handle->str_keyfile.c_str();
     handle->cfg.coverart_filename= handle->str_coverart_filename.empty() ? nullptr : handle->str_coverart_filename.c_str();
     handle->cfg.lang             = handle->str_lang.empty() ? nullptr : handle->str_lang.c_str();
+    handle->cfg.metadata_filename = handle->str_metadata_filename.empty() ? nullptr : handle->str_metadata_filename.c_str();
+    handle->cfg.record_filename  = handle->str_record_filename.empty() ? nullptr : handle->str_record_filename.c_str();
 
     return UXPLAY_OK;
 }
