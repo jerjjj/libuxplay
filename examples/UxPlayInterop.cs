@@ -231,6 +231,12 @@ namespace UxPlay.Interop
         public IntPtr LangPtr;
         [MarshalAs(UnmanagedType.U1)]
         public bool NoHold;
+        [MarshalAs(UnmanagedType.U1)]
+        public bool Overscanned;
+        [MarshalAs(UnmanagedType.U1)]
+        public bool RestrictClients;
+        [MarshalAs(UnmanagedType.U1)]
+        public bool ShowFpsData;
 
         // ---- Managed string helpers ----
         // These allocate native memory; call Dispose() when done.

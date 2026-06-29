@@ -201,6 +201,9 @@ typedef struct uxplay_config_s {
     bool  force_software_decoder;/**< Force software h264 decoding.                 */
     const char *metadata_filename; /**< Write metadata text to this file.           */
     const char *record_filename; /**< Record media to MP4 file (NULL = no).        */
+    bool  overscanned;           /**< Display overscan mode (-o).                   */
+    bool  restrict_clients;      /**< Restrict to allowed clients (-restrict).      */
+    bool  show_fps_data;         /**< Show FPS performance data in log (-FPSdata).  */
 } uxplay_config_t;
 
 /* ===================================================================

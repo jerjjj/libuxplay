@@ -306,6 +306,15 @@ static std::vector<std::string> config_to_args(const uxplay_config_t *c) {
     if (c->force_software_decoder) {
         a.push_back("-avdec");
     }
+    if (c->overscanned) {
+        a.push_back("-o");
+    }
+    if (c->restrict_clients) {
+        a.push_back("-restrict");
+    }
+    if (c->show_fps_data) {
+        a.push_back("-FPSdata");
+    }
     if (c->taper_volume) {
         a.push_back("-taper");
     }
@@ -404,6 +413,9 @@ UXPLAY_API uxplay_config_t uxplay_default_config(void) {
     c.reset_timeout         = 0;
     c.keep_window           = false;
     c.force_software_decoder = false;
+    c.overscanned       = false;
+    c.restrict_clients  = false;
+    c.show_fps_data     = false;
     return c;
 }
 
